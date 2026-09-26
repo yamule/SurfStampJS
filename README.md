@@ -1,7 +1,7 @@
 # SurfStampJS
 
 SurfStamp（生体分子表面に残基ラベルのテクスチャを貼るソフト, Apache-2.0, yamule）の JavaScript 移植版です。
-Node.js の標準モジュールのみを使用し、外部パッケージには依存しません。
+Node.js の標準モジュールのみを使用し、外部パッケージには依存しません。Claude に丸投げしていて今の所人間は何も確認してません。
 
 A JavaScript port of [SurfStamp](https://github.com/yamule/SurfStamp-public): it generates a molecular
 surface from a PDB file, unwraps the surface per residue, and paints residue labels onto a texture
