@@ -1,0 +1,13 @@
+{
+  "name": "surfstampjs",
+  "version": "0.1.0",
+  "description": "SurfStamp port to JavaScript: molecular surface generation and residue-label texture creation (no external dependencies)",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "src/index.js",
+  "bin": { "surfstamp": "bin/surfstamp.js" },
+  "scripts": {
+    "test": "node --test test/"
+  },
+  "engines": { "node": ">=18" }
+}
