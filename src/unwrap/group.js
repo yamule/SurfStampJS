@@ -172,6 +172,25 @@ export function findMountains(wm, faceList, processed, threshold = 0.5) {
   return { groups, processed };
 }
 
+/**
+ * Find a connected patch of faces whose uv scale is far below the median (ratio > `threshold`), grown by one ring.
+ * Returns null when the group's scale is uniform enough.
+ */
+function findSqueezedPatch(wm, faces, threshold) {
+  if (faces.length < 50) return null;
+  const scales = faces.map(fi => [fi, wm.faceScale(fi)]);
+  const sorted = scales.map(x => x[1]).sort((a, b) => a - b);
+  const median = sorted[Math.floor(sorted.length / 2)];
+  const p05 = sorted[Math.floor(sorted.length * 0.05)];
+  if (!(median > 0) || median / p05 <= threshold) return null;
+  const small = scales.filter(x => x[1] * threshold < median).map(x => x[0]);
+  if (small.length < 5) return null;
+  const comps = componentsOf(wm, small).sort((a, b) => b.length - a.length);
+  if (comps[0].length < 5) return null;
+  const topo = wm.topo(faces);
+  return Array.from(growRings(wm, topo, comps[0], 1));
+}
+
 /** Split a group in two by a geodesic Voronoi from two opposite outline vertices (fallback progress step). */
 function bisect(wm, g) {
   const topo = wm.topo(g);
@@ -257,6 +276,17 @@ export function unwrapDecoration(base, faceIndices, opts = {}) {
     if (res.ok) {
       wm.removeFaces(dummies);
       const real = g.filter(fi => !wm.isDummy(fi));
+      // faces squeezed far below the group's typical scale distort the letters: separate them (with the ring of
+      // large neighbours around them) into a new group and unwrap the remainder again
+      const squeezed = findSqueezedPatch(wm, real, opts.scaleSeparation ?? 4);
+      if (squeezed && squeezed.length && squeezed.length < real.length - 2) {
+        const sq = new Set(squeezed);
+        const rest = real.filter(fi => !sq.has(fi));
+        wm.privatize(squeezed); queue.push(squeezed);
+        wm.privatize(rest); queue.push(rest);
+        log && log(`  scale separation: ${squeezed.length} faces separated from ${real.length}`);
+        continue;
+      }
       if (real.length) done.push(real);
       continue;
     }

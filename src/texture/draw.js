@@ -224,28 +224,36 @@ export function drawTextureAtlas(p) {
         }
       }
     } else if (ir && opts.tile) {
-      const { lay } = ir;
+      // brick-pattern tiling of the label, clipped to the island shape
       const fsize = Math.floor((opts.tileFontSize ?? 16) * (size / 2048)) + 1;
       const tl = layoutText(font, d.text, fsize);
       const ink = inkBounds(tl);
-      const wid = ink.maxX - ink.minX;
-      for (const isl of d.islands) {
+      const wid = ink.maxX - ink.minX, hei = ink.maxY - ink.minY;
+      if (wid > 0 && hei > 0) for (const isl of d.islands) {
         if (!isl.loops.length) continue;
         const mask = new IslandMask(isl.loops, rule);
         const bb = mask.bbox;
+        const tmp = new Raster(mask.w, mask.h);
+        tmp.clear(0, 0, 0, 0);
         let line = 0;
-        for (let yo = fsize; yo < bb.h + fsize / 2; yo += Math.floor(fsize * 1.2)) {
+        for (let yo = fsize; yo < bb.h + fsize / 2; yo += Math.max(1, Math.floor(fsize * 1.2))) {
           for (let xo = line % 2 === 0 ? -wid / 2 : 0; xo < bb.w; xo += wid + fsize / 2) {
-            const cs = transformContours(tl.contours, bb.x + xo - ink.minX, bb.y + yo);
-            // clip to the island: only draw glyphs whose box is inside
-            const gx0 = bb.x + xo, gy0 = bb.y + yo - (ink.maxY - ink.minY), gx1 = gx0 + wid, gy1 = bb.y + yo;
-            if (!mask.contains(gx0, gy0, gx1, gy1)) continue;
-            raster.fillPath(cs, d.textColor, { rule: 'nonzero' });
+            const cs = transformContours(tl.contours, bb.x + xo - ink.minX - mask.ox, bb.y + yo - mask.oy);
+            tmp.fillPath(cs, [255, 255, 255], { rule: 'nonzero' });
           }
           line++;
         }
+        const W = mask.W;
+        for (let y = 0; y < mask.h; y++) for (let x = 0; x < mask.w; x++) {
+          const a = tmp.data[(y * mask.w + x) * 4 + 3];
+          if (!a) continue;
+          const inside = mask.sat[(y + 1) * W + x + 1] - mask.sat[y * W + x + 1] - mask.sat[(y + 1) * W + x] + mask.sat[y * W + x];
+          if (!inside) continue;
+          const px = x + mask.ox, py = y + mask.oy;
+          if (px < 0 || py < 0 || px >= size || py >= size) continue;
+          raster.blendPixel(px, py, d.textColor[0], d.textColor[1], d.textColor[2], a / 255);
+        }
       }
-      void lay;
     }
     if (!d.noOutline && d.outlineSegments && d.outlineSegments.length) {
       const width = Math.max(2, outlineWidth * (d.scaleFactor || 14.5407) / 14.5407);
