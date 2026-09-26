@@ -46,6 +46,11 @@ export { unwrapDecoration } from './unwrap/group.js';
  * @param {[number,number,number]} [opts.upPoint] 3D point placed at the top of every island (label orientation)
  * @param {boolean} [opts.separate=true] split groups by normal direction
  * @param {number} [opts.refineCycles=5]
+ * @param {number} [opts.largeThreshold=10000] groups with more faces use cluster mapping
+ * @param {boolean} [opts.forceLarge=false] always use cluster mapping
+ * @param {number} [opts.areaMaxRatio] split groups larger than this fraction of the decoration's area
+ * @param {number} [opts.maxGroupFaces] split groups with more faces than this
+ * @param {boolean} [opts.verbose=false] log per-decoration details
  * @param {(msg:string)=>void} [opts.log]
  * @returns {{vertices, faces, uv:number[][], faceUV:number[][], texture:import('./texture/raster.js').Raster, imageSize:number, labels:Array, decorations:Array}}
  */
@@ -58,21 +63,27 @@ export function createTexturedObject(mesh, decorations, opts = {}) {
   let di = 0;
   for (const d of decorations) {
     if (!d.faces || !d.faces.length) { unwrapped.push(null); di++; continue; }
-    const r = unwrapDecoration(mesh, d.faces, { upPoint: opts.upPoint, separate: opts.separate, refineCycles: opts.refineCycles, log: opts.verbose ? log : null });
-    const all = r.islands.flatMap(i => i.faces);
-    const b = r.wm.uvBounds(all);
-    unwrapped.push({ wm: r.wm, islands: r.islands, all, bounds: b });
+    let maxGroupArea = 0;
+    if (opts.areaMaxRatio > 0) maxGroupArea = opts.areaMaxRatio * d.faces.reduce((s, fi) => s + mesh.faceArea(fi), 0);
+    const r = unwrapDecoration(mesh, d.faces, {
+      upPoint: opts.upPoint, separate: opts.separate, refineCycles: opts.refineCycles, log: opts.verbose ? log : null,
+      largeThreshold: opts.largeThreshold, forceLarge: opts.forceLarge, maxGroupArea, maxGroupFaces: opts.maxGroupFaces,
+    });
+    unwrapped.push({ wm: r.wm, islands: r.islands });
     di++;
     if (di % 25 === 0) log(`unwrap: ${di}/${decorations.length} decorations (${Date.now() - t0} ms)`);
   }
   log(`unwrap: done ${decorations.length} decorations in ${Date.now() - t0} ms`);
-  // ---- atlas packing -------------------------------------------------------------------------------
-  const boxes = unwrapped.map(u => (u ? { width: u.bounds.width, height: u.bounds.height } : { width: 0, height: 0 }));
-  const margin = 3;
-  const placed = packBoxes(boxes, { margin });
+  // ---- atlas packing: every island of every decoration is packed globally ------------------------
+  const margin = 3; // in unwrap units (3 units per Angstrom) -> ~3 px after rescale
+  const islandList = [];
+  unwrapped.forEach((u, i) => { if (u) for (const isl of u.islands) islandList.push({ deco: i, isl }); });
+  const placed = packBoxes(islandList.map(e => ({ width: e.isl.width, height: e.isl.height })), { margin });
   let W = 0, H = 0;
-  placed.forEach((p, i) => { if (!unwrapped[i]) return; W = Math.max(W, p.x + boxes[i].width + 2 * margin); H = Math.max(H, p.y + boxes[i].height + 2 * margin); });
+  placed.forEach((p, k) => { W = Math.max(W, p.x + islandList[k].isl.width + 2 * margin); H = Math.max(H, p.y + islandList[k].isl.height + 2 * margin); });
   const scale = (imageSize - 10) / Math.max(W, H, 1e-9);
+  const islandOffset = new Map(); // isl -> [dx, dy] in unwrap units
+  placed.forEach((p, k) => { const e = islandList[k]; islandOffset.set(e.isl, [p.x + margin - e.isl.minX, p.y + margin - e.isl.minY]); });
   // ---- assemble uv list and per-decoration drawing data --------------------------------------------
   const uv = [[0, 0]]; // index 0: dummy for unmapped faces
   const faceUV = mesh.faces.map(() => [0, 0, 0]);
@@ -86,21 +97,18 @@ export function createTexturedObject(mesh, decorations, opts = {}) {
     const d = decorations[i];
     if (!u) continue;
     const { wm, islands } = u;
-    const p = placed[i];
-    const toPixel = (q) => [
-      (q[0] - u.bounds.minX + margin + p.x) * scale + 5,
-      imageSize - ((q[1] - u.bounds.minY + margin + p.y) * scale + 5),
-    ];
     const uvIndex = new Map();
-    const pixelOf = (v) => {
-      let e = uvIndex.get(v);
-      if (!e) { const px = toPixel(wm.uv[v]); e = { idx: uv.length, px }; uv.push([px[0] / imageSize, 1 - px[1] / imageSize]); uvIndex.set(v, e); }
-      return e;
-    };
+    let scaleAcc = 0, scaleN = 0;
     const dIslands = [];
     const segs = [];
-    let sumAreaPx = 0, sumArea3D = 0, scaleAcc = 0, scaleN = 0;
     for (const isl of islands) {
+      const off = islandOffset.get(isl);
+      const toPixel = (q) => [(q[0] + off[0]) * scale + 5, imageSize - ((q[1] + off[1]) * scale + 5)];
+      const pixelOf = (v) => {
+        let e = uvIndex.get(v);
+        if (!e) { const px = toPixel(wm.uv[v]); e = { idx: uv.length, px }; uv.push([px[0] / imageSize, 1 - px[1] / imageSize]); uvIndex.set(v, e); }
+        return e;
+      };
       const loops = wm.topo(isl.faces).boundaryLoops().map(lp => { const c = []; for (const v of lp) { const px = pixelOf(v).px; c.push(px[0], px[1]); } return c; });
       let area3D = 0;
       for (const fi of isl.faces) {
@@ -111,7 +119,6 @@ export function createTexturedObject(mesh, decorations, opts = {}) {
         area3D += a3;
         const P = [pixelOf(f[0]).px, pixelOf(f[1]).px, pixelOf(f[2]).px];
         const aPx = Math.abs((P[1][0] - P[0][0]) * (P[2][1] - P[0][1]) - (P[1][1] - P[0][1]) * (P[2][0] - P[0][0])) / 2;
-        sumAreaPx += aPx; sumArea3D += a3;
         if (a3 > 0 && aPx > 0) { scaleAcc += Math.sqrt(aPx / a3); scaleN++; }
         // outline segments: edges whose base edge separates different decorations
         for (let k = 0; k < 3; k++) {
@@ -132,7 +139,6 @@ export function createTexturedObject(mesh, decorations, opts = {}) {
       islands: dIslands, outlineSegments: segs, scaleFactor: scaleN ? scaleAcc / scaleN : 14.5407,
       minLabelArea3D: d.minLabelArea3D,
     });
-    void sumAreaPx; void sumArea3D;
   }
   log(`texture: drawing ${imageSize}x${imageSize} (${uv.length} uv)`);
   const t1 = Date.now();

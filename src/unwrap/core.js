@@ -153,7 +153,7 @@ export function repairFlips(wm, faceList, topo, outlineVerts, { maxRounds = 6 } 
   let flipped = flippedFaces(wm, faceList);
   const faceSet = new Set(faceList);
   for (let round = 0; round < maxRounds && flipped.length; round++) {
-    const rings = 2 + round;
+    const rings = [2, 3, 5, 8, 12, 17, 25, 40][Math.min(round, 7)];
     const region = growRings(wm, topo, flipped, rings);
     const regionVerts = new Set();
     for (const fi of region) for (const v of wm.faces[fi]) regionVerts.add(v);
@@ -420,4 +420,26 @@ export function unwrapDisk(wm, faceList, opts = {}) {
   normalizeScale(wm, faceList);
   const overlaps = flipped.length ? [] : findOverlaps(wm, faceList);
   return { ok: flipped.length === 0 && overlaps.length === 0, flipped, overlaps, outline, center, usedFallback };
+}
+
+/**
+ * Guaranteed embedding: the outline goes on a circle (arc-length parametrised, top vertex kept) and the interior is
+ * solved by Tutte's barycentric mapping. Returns the outline vertex set.
+ */
+export function convexTutteEmbedding(wm, faceList, topo, outline, topIndex = 0) {
+  const n = outline.length;
+  let L = 0;
+  const seg = new Float64Array(n);
+  for (let i = 0; i < n; i++) { seg[i] = wm.edgeLength(outline[i], outline[(i + 1) % n]); L += seg[i]; }
+  const radius = L / (2 * Math.PI);
+  let s = 0;
+  for (let k = 0; k < n; k++) {
+    const i = (topIndex + k) % n;
+    const ang = Math.PI / 2 + (2 * Math.PI * s) / L;
+    wm.uv[outline[i]] = [radius * Math.cos(ang), radius * Math.sin(ang)];
+    s += seg[i];
+  }
+  const outlineSet = new Set(outline);
+  tutteSolve(wm, topo, outlineSet);
+  return outlineSet;
 }

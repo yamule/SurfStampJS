@@ -47,6 +47,11 @@ Texture
   -nobackground -nooutline -notext
   -maxfill               nonzero fill rule
   -nosep                 do not split groups by normal direction
+  -large_threshold N     groups with more faces use cluster mapping (default 10000)
+  -unwrap_large          always use cluster mapping
+  -areamax_ratio F       split groups larger than F x the decoration area (e.g. 0.1)
+  -max_group_faces N     split groups with more than N faces
+  -verbose               per-decoration details
   -refinement_num N      scale refinement cycles (default 5)
   -targetpoint x,y,z     point placed at the top of every island (default: +y)
   -mtl_template FILE     material template
@@ -118,7 +123,10 @@ export async function main(argv) {
     tile: !!o.tile, tileFontSize: o.fontsize != null ? parseFloat(o.fontsize) : 16,
     maxfill: !!o.maxfill, separate: !o.nosep,
     refineCycles: o.refinementnum != null ? parseInt(o.refinementnum) : 5,
-    upPoint, log, quiet,
+    upPoint, log, quiet, verbose: !!o.verbose,
+    largeThreshold: o.largethreshold != null ? parseInt(o.largethreshold) : 10000, forceLarge: !!o.unwraplarge,
+    areaMaxRatio: o.areamaxratio != null ? parseFloat(o.areamaxratio) : 0,
+    maxGroupFaces: o.maxgroupfaces != null ? parseInt(o.maxgroupfaces) : 0,
   });
   const mtlTemplate = o.mtltemplate ? fs.readFileSync(o.mtltemplate, 'utf8') : null;
   const saved = saveTexturedObject(result, objPath, { mtlTemplate, name: path.basename(outPrefix) });

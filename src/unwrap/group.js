@@ -3,6 +3,8 @@
 // algorithm, separates failing faces into new groups, and finally packs the islands of the decoration.
 import { WorkMesh } from './workmesh.js';
 import { unwrapDisk, normalizeScale, growRings } from './core.js';
+import { unwrapLarge } from './cluster.js';
+import { makeDisk } from './disk.js';
 import { v3 } from '../vec.js';
 import { packBoxes } from './pack.js';
 
@@ -170,53 +172,6 @@ export function findMountains(wm, faceList, processed, threshold = 0.5) {
   return { groups, processed };
 }
 
-/**
- * Make a face group a topological disk: cut closed surfaces open, fill holes, cut handles, slit pockets.
- * Returns the (possibly extended by dummy faces) face list, or null if the group is empty.
- */
-function makeDisk(wm, group, log) {
-  let g = group.slice();
-  for (let guard = 0; guard < 20; guard++) {
-    wm.splitNonManifoldVertices(g);
-    let topo = wm.topo(g);
-    let loops = topo.boundaryLoops();
-    if (!loops.length) {
-      // closed surface: slit along the longest geodesic path
-      const path = wm.longestPath(g, topo);
-      if (path.length < 2) { // single face or degenerate: detach one face
-        const f = wm.faces[g[0]];
-        for (let m = 0; m < 3; m++) f[m] = wm.cloneVertex(f[m]);
-      } else wm.cutPath(path, g, { loop: false });
-      continue;
-    }
-    if (loops.length > 1) {
-      const dummies = wm.fillHoles(g);
-      g.push(...dummies);
-      topo = wm.topo(g);
-      loops = topo.boundaryLoops();
-    }
-    // genus check: disk has chi = 1 with a single loop
-    const eu = wm.euler(g);
-    if (eu.loops === 1 && eu.chi < 1) {
-      const loop = wm.findHandleLoop(g);
-      if (loop && loop.length >= 3) { wm.cutPath(loop, g, { loop: true }); continue; }
-    }
-    if (eu.loops !== 1) continue;
-    // pocket check: outline too short for the depth
-    const outline = loops[0];
-    const L = wm.loopLength(outline);
-    const fromOutline = wm.dijkstra(outline, topo);
-    let deep = -1, deepV = -1;
-    for (const [v, d] of fromOutline.dist) if (d > deep) { deep = d; deepV = v; }
-    if (g.length >= 5 && deepV >= 0 && L < deep * 2 * Math.PI * 0.8) {
-      const path = wm.shortestPath(deepV, fromOutline.src.get(deepV), topo);
-      if (path && path.length >= 3) { wm.cutPath(path, g, { loop: false }); log && log(`  pocket slit (${path.length} vertices)`); continue; }
-    }
-    return g;
-  }
-  return g;
-}
-
 /** Split a group in two by a geodesic Voronoi from two opposite outline vertices (fallback progress step). */
 function bisect(wm, g) {
   const topo = wm.topo(g);
@@ -264,6 +219,11 @@ export function unwrapDecoration(base, faceIndices, opts = {}) {
     const comps = componentsOf(wm, g);
     if (comps.length > 1) { g = comps[0]; for (let i = 1; i < comps.length; i++) { wm.privatize(comps[i]); queue.push(comps[i]); } }
     wm.privatize(g);
+    // optional size limits: bisect groups that are too large (area or face count)
+    if (g.length > 1 && ((opts.maxGroupArea > 0 && g.reduce((s, fi) => s + wm.faceArea(fi), 0) > opts.maxGroupArea) || (opts.maxGroupFaces > 0 && g.length > opts.maxGroupFaces))) {
+      for (const half of bisect(wm, g)) if (half.length) { wm.privatize(half); queue.push(half); }
+      continue;
+    }
     g = makeDisk(wm, g, log);
     const dummies = g.filter(fi => wm.isDummy(fi));
     // fingers / mountains
@@ -289,7 +249,11 @@ export function unwrapDecoration(base, faceIndices, opts = {}) {
         continue;
       }
     }
-    const res = unwrapDisk(wm, g, { upPoint: opts.upPoint, refineCycles: opts.refineCycles });
+    const largeThreshold = opts.largeThreshold ?? 10000;
+    const res = ((g.length > largeThreshold || opts.forceLarge) && g.length > 90)
+      ? unwrapLarge(wm, g, { upPoint: opts.upPoint, refineCycles: opts.refineCycles, largeThreshold })
+      : unwrapDisk(wm, g, { upPoint: opts.upPoint, refineCycles: opts.refineCycles });
+    if (log && res.clusters) log(`  cluster unwrap: ${g.length} faces in ${res.clusters} clusters -> ${res.ok ? 'ok' : 'failed'}`);
     if (res.ok) {
       wm.removeFaces(dummies);
       const real = g.filter(fi => !wm.isDummy(fi));
